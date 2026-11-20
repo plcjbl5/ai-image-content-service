@@ -1,0 +1,55 @@
+import streamlit as st
+from google import genai
+from PIL import Image
+import gspread
+from google.oauth2.service_account import Credentials
+from datetime import datetime
+
+st.set_page_config(page_title="AI Image-to-Content Studio", layout="centered")
+st.title("📸 Image-to-Text & Content Generator")
+
+# Load secrets from Streamlit Cloud
+gemini_client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+
+scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
+gc = gspread.authorize(creds)
+sheet = gc.open("Client_Content_Output").sheet1
+
+# User Interface
+client_name = st.text_input("Client / Project Name", placeholder="e.g., Shopify Store Batch 1")
+content_type = st.selectbox("Output Format", [
+    "E-commerce Product Title, Bullet Points & SEO Description",
+    "Instagram / Facebook Post + Hashtags",
+    "Clean OCR Text Extraction & Summary",
+    "Blog Post Draft from Infographic/Notes"
+])
+uploaded_files = st.file_uploader("Upload Images (JPG/PNG)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+
+if st.button("Generate & Save to Google Sheets") and uploaded_files:
+    for file in uploaded_files:
+        with st.spinner(f"Processing {file.name}..."):
+            img = Image.open(file)
+            prompt = (
+                f"1. Extract all visible text and key visual details from this image.\n"
+                f"2. Based on that, write high-converting content formatted as: {content_type}.\n"
+                f"Separate the output clearly with '---EXTRACTED---' and '---CONTENT---'."
+            )
+            
+            response = gemini_client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[img, prompt]
+            )
+            
+            full_text = response.text
+            parts = full_text.split("---CONTENT---")
+            extracted = parts[0].replace("---EXTRACTED---", "").strip()
+            generated = parts[1].strip() if len(parts) > 1 else full_text
+
+            # Save directly to Google Sheets
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            sheet.append_row([timestamp, client_name, extracted, generated])
+
+            st.success(f"Completed: {file.name}")
+            st.markdown(generated)
+            st.divider()
